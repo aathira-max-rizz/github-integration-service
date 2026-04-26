@@ -6,26 +6,26 @@ import os
 
 load_dotenv()
 
-router = APIRouter()
+router = APIRouter(prefix="/github", tags=["GitHub Auth"])
 
 CLIENT_ID = os.getenv("GITHUB_CLIENT_ID")
 CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET")
 
-# -----------------------------
-# Step 1: Redirect to GitHub
-# -----------------------------
-@router.get("/github/auth")
+
+# 🔹 Step 1: Redirect to GitHub
+@router.get("/auth")
 def github_login():
     github_url = f"https://github.com/login/oauth/authorize?client_id={CLIENT_ID}&scope=repo"
     return RedirectResponse(github_url)
 
 
-# -----------------------------
-# Step 2: Callback
-# -----------------------------
-@router.get("/github/callback")
+# 🔹 Step 2: Callback
+@router.get("/callback")
 def github_callback(request: Request):
     code = request.query_params.get("code")
+
+    if not code:
+        return {"error": "No code received from GitHub"}
 
     token_response = requests.post(
         "https://github.com/login/oauth/access_token",
@@ -51,27 +51,28 @@ def github_callback(request: Request):
 
     repos = repos_response.json()
 
-    # clean output
     clean_repos = [
         {"name": repo["name"], "url": repo["html_url"]}
         for repo in repos
     ]
 
     return {
-        "access_token": access_token,
+        "message": "Authentication successful",
         "repo_count": len(clean_repos),
-        "repos": clean_repos[:5]
+        "repos": clean_repos[:5],
+        "note": "Token not stored yet (DB pending)"
     }
 
 
-# -----------------------------
-# Step 3: Create Repo
-# -----------------------------
-@router.post("/github/create-repo")
+# 🔹 Step 3: Create Repo
+@router.post("/create-repo")
 def create_repo(
     repo_name: str = Body(...),
-    authorization: str = Header(...)
+    authorization: str = Header(None)
 ):
+    if not authorization:
+        return {"error": "Missing Authorization header"}
+
     access_token = authorization.replace("Bearer ", "")
 
     repo_response = requests.post(
