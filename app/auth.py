@@ -1,8 +1,10 @@
+import base64
 from fastapi import APIRouter, Request, Body, Header
 from fastapi.responses import RedirectResponse
 from dotenv import load_dotenv
 import requests
 import os
+from app.db import get_connection
 
 load_dotenv()
 
@@ -27,6 +29,7 @@ def github_callback(request: Request):
     if not code:
         return {"error": "No code received from GitHub"}
 
+    # 🔹 Exchange code for access token
     token_response = requests.post(
         "https://github.com/login/oauth/access_token",
         data={
@@ -43,7 +46,29 @@ def github_callback(request: Request):
     if not access_token:
         return {"error": token_json}
 
-    # fetch repos
+    # 🔹 Encode (basic encryption)
+    encoded_token = base64.b64encode(access_token.encode()).decode()
+
+    # 🔹 Store token in DB
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+
+        cur.execute(
+            "INSERT INTO github_tokens (token) VALUES (%s)",
+            (encoded_token,)
+        )
+
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        print("✅ Token stored in DB (encoded)")
+
+    except Exception as e:
+        print("❌ DB error:", e)
+
+    # 🔹 Fetch repos
     repos_response = requests.get(
         "https://api.github.com/user/repos",
         headers={"Authorization": f"Bearer {access_token}"}
@@ -60,7 +85,7 @@ def github_callback(request: Request):
         "message": "Authentication successful",
         "repo_count": len(clean_repos),
         "repos": clean_repos[:5],
-        "note": "Token not stored yet (DB pending)"
+        "note": "Token stored in PostgreSQL (encoded)"
     }
 
 
@@ -88,3 +113,24 @@ def create_repo(
     )
 
     return repo_response.json()
+
+
+# 🔹 Step 4: Get Repos (separate endpoint)
+@router.get("/repos")
+def get_repos(authorization: str = Header(None)):
+    if not authorization:
+        return {"error": "Missing Authorization header"}
+
+    access_token = authorization.replace("Bearer ", "")
+
+    response = requests.get(
+        "https://api.github.com/user/repos",
+        headers={"Authorization": f"Bearer {access_token}"}
+    )
+
+    repos = response.json()
+
+    return [
+        {"name": repo["name"], "url": repo["html_url"]}
+        for repo in repos
+    ]
