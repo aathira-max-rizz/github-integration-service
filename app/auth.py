@@ -1,35 +1,52 @@
 import base64
+import os
+import requests
+
+from dotenv import load_dotenv
 from fastapi import APIRouter, Request, Body, Header
 from fastapi.responses import RedirectResponse
-from dotenv import load_dotenv
-import requests
-import os
+
 from app.db import get_connection
 
 load_dotenv()
 
-router = APIRouter(prefix="/github", tags=["GitHub Auth"])
+# ✅ Router
+router = APIRouter(
+    prefix="/github",
+    tags=["GitHub Auth"]
+)
 
+# ✅ GitHub OAuth credentials
 CLIENT_ID = os.getenv("GITHUB_CLIENT_ID")
 CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET")
 
 
-# 🔹 Step 1: Redirect to GitHub
+# =========================================================
+# 🔹 STEP 1: GitHub Login
+# =========================================================
 @router.get("/auth")
 def github_login():
-    github_url = f"https://github.com/login/oauth/authorize?client_id={CLIENT_ID}&scope=repo"
+
+    github_url = (
+        f"https://github.com/login/oauth/authorize"
+        f"?client_id={CLIENT_ID}&scope=repo"
+    )
+
     return RedirectResponse(github_url)
 
 
-# 🔹 Step 2: Callback
+# =========================================================
+# 🔹 STEP 2: GitHub Callback
+# =========================================================
 @router.get("/callback")
 def github_callback(request: Request):
+
     code = request.query_params.get("code")
 
     if not code:
         return {"error": "No code received from GitHub"}
 
-    # 🔹 Exchange code for access token
+    # ✅ Exchange code for access token
     token_response = requests.post(
         "https://github.com/login/oauth/access_token",
         data={
@@ -37,49 +54,73 @@ def github_callback(request: Request):
             "client_secret": CLIENT_SECRET,
             "code": code
         },
-        headers={"Accept": "application/json"}
+        headers={
+            "Accept": "application/json"
+        }
     )
 
     token_json = token_response.json()
+
     access_token = token_json.get("access_token")
 
     if not access_token:
-        return {"error": token_json}
+        return {
+            "error": "Failed to get access token",
+            "details": token_json
+        }
 
-    # 🔹 Encode (basic encryption)
-    encoded_token = base64.b64encode(access_token.encode()).decode()
+    # =====================================================
+    # ✅ Encode token before storing
+    # =====================================================
+    encoded_token = base64.b64encode(
+        access_token.encode()
+    ).decode()
 
-    # 🔹 Store token in DB
+    # =====================================================
+    # ✅ Store token in PostgreSQL
+    # =====================================================
     try:
+
         conn = get_connection()
         cur = conn.cursor()
 
         cur.execute(
-            "INSERT INTO github_tokens (token) VALUES (%s)",
+            """
+            INSERT INTO github_tokens (token)
+            VALUES (%s)
+            """,
             (encoded_token,)
         )
 
         conn.commit()
+
         cur.close()
         conn.close()
 
-        print("✅ Token stored in DB (encoded)")
+        print("✅ Token stored in DB")
 
     except Exception as e:
-        print("❌ DB error:", e)
+        print("❌ Database error:", e)
 
-    # 🔹 Fetch repos
+    # =====================================================
+    # ✅ Fetch user repositories
+    # =====================================================
     repos_response = requests.get(
         "https://api.github.com/user/repos",
-        headers={"Authorization": f"Bearer {access_token}"}
+        headers={
+            "Authorization": f"Bearer {access_token}"
+        }
     )
 
     repos = repos_response.json()
 
-    clean_repos = [
-        {"name": repo["name"], "url": repo["html_url"]}
-        for repo in repos
-    ]
+    clean_repos = []
+
+    for repo in repos:
+        clean_repos.append({
+            "name": repo["name"],
+            "url": repo["html_url"]
+        })
 
     return {
         "message": "Authentication successful",
@@ -89,12 +130,15 @@ def github_callback(request: Request):
     }
 
 
-# 🔹 Step 3: Create Repo
+# =========================================================
+# 🔹 STEP 3: Create New Private Repo
+# =========================================================
 @router.post("/create-repo")
 def create_repo(
     repo_name: str = Body(...),
     authorization: str = Header(None)
 ):
+
     if not authorization:
         return {"error": "Missing Authorization header"}
 
@@ -115,9 +159,14 @@ def create_repo(
     return repo_response.json()
 
 
-# 🔹 Step 4: Get Repos (separate endpoint)
+# =========================================================
+# 🔹 STEP 4: Get User Repositories
+# =========================================================
 @router.get("/repos")
-def get_repos(authorization: str = Header(None)):
+def get_repos(
+    authorization: str = Header(None)
+):
+
     if not authorization:
         return {"error": "Missing Authorization header"}
 
@@ -125,12 +174,17 @@ def get_repos(authorization: str = Header(None)):
 
     response = requests.get(
         "https://api.github.com/user/repos",
-        headers={"Authorization": f"Bearer {access_token}"}
+        headers={
+            "Authorization": f"Bearer {access_token}"
+        }
     )
 
     repos = response.json()
 
     return [
-        {"name": repo["name"], "url": repo["html_url"]}
+        {
+            "name": repo["name"],
+            "url": repo["html_url"]
+        }
         for repo in repos
     ]
